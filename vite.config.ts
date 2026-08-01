@@ -1,0 +1,47 @@
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+import tailwindcss from '@tailwindcss/vite'
+import svgr from 'vite-plugin-svgr'
+
+// Custom plugin to handle ?import&react syntax (alias to ?react)
+const svgImportPlugin = () => ({
+  name: 'svg-import-alias',
+  resolveId(id) {
+    // Transform ?import&react to ?react for vite-plugin-svgr
+    if (id.includes('?import&react')) {
+      return id.replace('?import&react', '?react');
+    }
+    return null;
+  },
+});
+
+import path from "path";
+
+// https://vite.dev/config/
+export default defineConfig(({ command }) => ({
+  resolve: {
+    alias: {
+      "@": path.resolve(__dirname, "./src"),
+    },
+  },
+  plugins: [
+    react(),
+    tailwindcss(),
+    svgImportPlugin(),
+    svgr({
+      // Support named ReactComponent export (for ?react syntax)
+      svgrOptions: {
+        exportType: 'named',
+        namedExport: 'ReactComponent',
+        ref: true,
+        svgo: false,
+        titleProp: true,
+      },
+      include: '**/*.svg?react',
+    }),
+  ],
+  server: {
+    allowedHosts: true,
+    hmr: false,
+  },
+}))

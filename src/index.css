@@ -1,0 +1,39 @@
+@import url('https://fonts.googleapis.com/css2?family=Nunito+Sans:wght@300;400;500;600;700&family=Varela+Round&display=swap');
+
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Nunito Sans", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-heading: "Varela Round", ui-sans-serif, system-ui, -apple-system, sans-serif;
+
+  /* Money-green — primary actions, price highlights */
+  --color-primary: oklch(0.58 0.17 155);
+  --color-on-primary: oklch(1.0 0 0);
+
+  /* Warm amber — secondary highlights, badges, condition tags */
+  --color-accent: oklch(0.72 0.16 68);
+
+  /* Warm off-white background — not pure white, not slate */
+  --color-background: oklch(0.9869 0.0214 95.28);
+  --color-foreground: oklch(0.25 0.02 260);
+
+  /* Subtle muted for cards/surfaces */
+  --color-muted: oklch(0.97 0.005 95);
+  --color-border: oklch(0.91 0.01 90);
+
+  --color-destructive: oklch(0.577 0.215 27.33);
+  --color-ring: oklch(0.58 0.17 155);
+
+  /* Generously rounded */
+  --radius-sm: 0.5rem;
+  --radius-md: 0.75rem;
+  --radius-lg: 1rem;
+  --radius-xl: 1.25rem;
+
+  /* Soft shadows */
+  --shadow-card: 0 4px 24px rgba(0, 0, 0, 0.06);
+  --shadow-card-hover: 0 8px 32px rgba(0, 0, 0, 0.10);
+
+  /* Animation */
+  --ease-out: cubic-bezier(0, 0, 0.2, 1);
+}
