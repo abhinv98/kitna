@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect } from "react";
 import type { AppraisalSession, AppraisalResult } from "@/lib/types";
 import { DEMO_RESULTS, DEMO_TIMING } from "@/lib/demo-data";
 import type { ExampleObject } from "@/lib/types";
@@ -18,7 +18,6 @@ export default function AnalyzingScreen({
   onComplete,
 }: AnalyzingScreenProps) {
   const [phase, setPhase] = useState<Phase>("identifying");
-  const [result, setResult] = useState<AppraisalResult | null>(null);
 
   // Simulate progressive analysis
   useEffect(() => {
@@ -44,8 +43,7 @@ export default function AnalyzingScreen({
 
     const t3 = setTimeout(() => {
       setPhase("done");
-      setResult(filled);
-    }, DEMO_TIMING.pricing);
+    }, DEMO_TIMING.prices);
 
     const t4 = setTimeout(() => {
       onComplete(filled);

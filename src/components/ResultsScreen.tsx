@@ -17,7 +17,6 @@ import {
   Check,
   Info,
   ExternalLink,
-  ChevronRight,
 } from "lucide-react";
 
 interface ResultsScreenProps {
