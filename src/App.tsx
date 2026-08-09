@@ -1,31 +1,29 @@
 import { useState } from "react";
+import { Toaster } from "sonner";
 import CaptureScreen from "@/components/CaptureScreen";
 import AnalyzingScreen from "@/components/AnalyzingScreen";
 import ResultsScreen from "@/components/ResultsScreen";
-
-export type AppScreen = "capture" | "analyzing" | "results";
-
-export interface AppraisalData {
-  image: string;
-  isDemo: boolean;
-  demoObject?: string;
-}
+import type { AppScreen, AppraisalSession, AppraisalResult } from "@/lib/types";
 
 export default function App() {
   const [screen, setScreen] = useState<AppScreen>("capture");
-  const [appraisalData, setAppraisalData] = useState<AppraisalData | null>(null);
+  const [session, setSession] = useState<AppraisalSession | null>(null);
+  const [result, setResult] = useState<AppraisalResult | null>(null);
 
-  const handleCapture = (data: AppraisalData) => {
-    setAppraisalData(data);
+  const handleCapture = (data: AppraisalSession) => {
+    setSession(data);
+    setResult(null);
     setScreen("analyzing");
   };
 
-  const handleAnalysisComplete = () => {
+  const handleAnalysisComplete = (appraisal: AppraisalResult) => {
+    setResult(appraisal);
     setScreen("results");
   };
 
   const handleReset = () => {
-    setAppraisalData(null);
+    setSession(null);
+    setResult(null);
     setScreen("capture");
   };
 
@@ -41,13 +39,29 @@ export default function App() {
 
       <main id="main-content">
         {screen === "capture" && <CaptureScreen onCapture={handleCapture} />}
-        {screen === "analyzing" && (
-          <AnalyzingScreen data={appraisalData!} onComplete={handleAnalysisComplete} />
+        {screen === "analyzing" && session && (
+          <AnalyzingScreen
+            session={session}
+            onComplete={handleAnalysisComplete}
+          />
         )}
-        {screen === "results" && (
-          <ResultsScreen data={appraisalData!} onReset={handleReset} />
+        {screen === "results" && result && (
+          <ResultsScreen result={result} onReset={handleReset} />
         )}
       </main>
+
+      {/* Sonner toast */}
+      <Toaster
+        position="bottom-center"
+        toastOptions={{
+          style: {
+            background: "oklch(0.25 0.02 260)",
+            color: "white",
+            borderRadius: "0.75rem",
+            border: "none",
+          },
+        }}
+      />
     </div>
   );
 }

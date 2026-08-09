@@ -11,13 +11,13 @@ import {
   X,
   ImageIcon,
   Monitor,
+  Check,
 } from "lucide-react";
-import type { AppraisalData } from "@/App";
-
-const EXAMPLE_OBJECTS = ["phone", "headphones", "sneaker", "mug", "book"] as const;
+import type { AppraisalSession } from "@/lib/types";
+import { EXAMPLE_OBJECTS as SHARED_EXAMPLE_OBJECTS } from "@/lib/types";
 
 interface CaptureScreenProps {
-  onCapture: (data: AppraisalData) => void;
+  onCapture: (data: AppraisalSession) => void;
 }
 
 export default function CaptureScreen({ onCapture }: CaptureScreenProps) {
@@ -245,7 +245,7 @@ export default function CaptureScreen({ onCapture }: CaptureScreenProps) {
             Try it with
           </p>
           <div className="flex flex-wrap gap-2">
-            {EXAMPLE_OBJECTS.map((obj) => {
+            {SHARED_EXAMPLE_OBJECTS.map((obj) => {
               const isSelected = isDemoMode && selectedDemoObject === obj;
               return (
                 <Badge
@@ -258,7 +258,7 @@ export default function CaptureScreen({ onCapture }: CaptureScreenProps) {
                   `}
                 >
                   {isSelected && (
-                    <span className="mr-1 text-[10px]">&#9679;</span>
+                    <Check className="w-3 h-3 mr-0.5 text-primary" />
                   )}
                   {obj}
                 </Badge>
