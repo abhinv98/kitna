@@ -3,6 +3,7 @@ import { Toaster } from "sonner";
 import CaptureScreen from "@/components/CaptureScreen";
 import AnalyzingScreen from "@/components/AnalyzingScreen";
 import ResultsScreen from "@/components/ResultsScreen";
+import ListingScreen from "@/components/ListingScreen";
 import type { AppScreen, AppraisalSession, AppraisalResult } from "@/lib/types";
 
 export default function App() {
@@ -18,6 +19,14 @@ export default function App() {
 
   const handleAnalysisComplete = (appraisal: AppraisalResult) => {
     setResult(appraisal);
+    setScreen("results");
+  };
+
+  const handleCreateListing = () => {
+    setScreen("listing");
+  };
+
+  const handleBackToResults = () => {
     setScreen("results");
   };
 
@@ -46,7 +55,18 @@ export default function App() {
           />
         )}
         {screen === "results" && result && (
-          <ResultsScreen result={result} onReset={handleReset} />
+          <ResultsScreen
+            result={result}
+            onReset={handleReset}
+            onCreateListing={handleCreateListing}
+          />
+        )}
+        {screen === "listing" && result && (
+          <ListingScreen
+            result={result}
+            onBack={handleBackToResults}
+            onReset={handleReset}
+          />
         )}
       </main>
 

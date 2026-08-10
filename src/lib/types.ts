@@ -11,10 +11,21 @@ export interface AppraisalResult {
   keyAttributes: string[];
   resaleRangeLow: number;
   resaleRangeHigh: number;
-  retailPrice: number | null;       // null if price API failed
-  priceSource: "live" | "estimate"; // whether retail came from API or category fallback
+  retailPrice: number | null;
+  priceSource: "live" | "estimate";
   comparablePrices: ComparablePrice[];
   searchQuery: string;
+
+  /* ── Phase 1 — Extended fields ── */
+  typicalPrice: number;            // single "typical" number at top of resale range
+  bestChannel: string;             // e.g. "olx" | "facebook" | "quikr" | "ebay"
+  listingTitle: string;            // pre-generated platform-specific title
+  listingDescription: string;      // pre-generated platform-specific description
+  suggestedPrice: number;          // what to ask
+  askingPrice: number;             // initial display price (same as suggestedPrice)
+  walkAwayFloor: number;           // lowest acceptable offer
+  counterLines: string[];          // e.g. ["That's a bit lower than I was hoping…", "Can we meet at ₹X?"]
+  confidence: number;              // 0–1 how sure the model is
 }
 
 export type ConditionGrade =
@@ -37,7 +48,7 @@ export interface AppraisalSession {
   result?: AppraisalResult;
 }
 
-export type AppScreen = "capture" | "analyzing" | "results";
+export type AppScreen = "capture" | "analyzing" | "results" | "listing";
 
 export const CONDITION_COLORS: Record<ConditionGrade, string> = {
   Mint: "bg-emerald-100 text-emerald-700 border-emerald-200",
