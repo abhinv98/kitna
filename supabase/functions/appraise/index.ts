@@ -25,9 +25,12 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-kitna-debug",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
+
+// TEMP diagnostics for the Bright Data parse investigation — removed once fixed.
+const __bdDebug: string[] = [];
 
 const VALID_GRADES = ["Mint", "Excellent", "Good", "Fair", "Poor"];
 
@@ -207,83 +210,46 @@ function domainToMerchant(url: string): string {
 async function fetchLiveComps(searchQuery: string): Promise<ComparablePrice[]> {
   const token = Deno.env.get("BRIGHTDATA_TOKEN");
   const zone = Deno.env.get("BRIGHTDATA_ZONE");
-  if (!token || !zone) return [];
+  if (!token || !zone) {
+    __bdDebug.push(`BD config: token set = ${!!token} | zone set = ${!!zone}`);
+    return [];
+  }
 
   const target =
     "https://www.google.com/search?q=" +
     encodeURIComponent(`${searchQuery} used price india`) +
     "&gl=in&hl=en&brd_json=1";
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), COMP_TIMEOUT_MS);
-
-  try {
-    const resp = await fetch("https://api.brightdata.com/request", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ zone, url: target, format: "raw" }),
-      signal: controller.signal,
-    });
-    if (!resp.ok) return [];
-
-    const body = (await resp.json().catch(() => null)) as Record<string, unknown> | null;
-    if (!body) return [];
-
-    const entries = Array.isArray(body.result)
-      ? (body.result as unknown[])
-      : Array.isArray(body.results)
-        ? (body.results as unknown[])
-        : [];
-
-    const comps: ComparablePrice[] = [];
-    for (const entry of entries) {
-      if (comps.length >= MAX_COMPS) break;
-      const e = entry as Record<string, unknown>;
-      const raw = typeof e.result === "string"
-        ? e.result
-        : typeof e.body === "string"
-          ? e.body
-          : null;
-      if (!raw) continue;
-
-      let serp: Record<string, unknown>;
-      try {
-        serp = JSON.parse(raw) as Record<string, unknown>;
-      } catch {
-        continue; // not JSON — skip, never fail the whole lookup
+  // TEMP probe round 4 — full response with stored zone vs invalid zone.
+  const payload = JSON.stringify({ zone, url: target, format: "raw" });
+  for (const [name, z] of [["stored-zone", zone], ["invalid-zone", "definitely_not_a_real_zone_xyz"]] as Array<[string, string]>) {
+    try {
+      const conn = await Deno.connectTls({ hostname: "api.brightdata.com", port: 443 });
+      const req =
+        `POST /request HTTP/1.1\r\n` +
+        `Host: api.brightdata.com\r\n` +
+        `Authorization: Bearer ${token}\r\n` +
+        `Content-Type: application/json\r\n` +
+        `Content-Length: ${JSON.stringify({ zone: z, url: target, format: "raw" }).length}\r\n` +
+        `Connection: close\r\n\r\n` +
+        JSON.stringify({ zone: z, url: target, format: "raw" });
+      await conn.write(new TextEncoder().encode(req));
+      const buf = new Uint8Array(65536);
+      let resp = "";
+      for (let i = 0; i < 2000; i++) {
+        const n = await conn.read(buf);
+        if (n === null) break;
+        resp += new TextDecoder().decode(buf.subarray(0, n));
+        if (resp.length > 200000) break;
       }
-
-      const items = Array.isArray(serp.items)
-        ? (serp.items as unknown[])
-        : Array.isArray(serp.organic_results)
-          ? (serp.organic_results as unknown[])
-          : Array.isArray(serp.results)
-            ? (serp.results as unknown[])
-            : [];
-
-      for (const item of items) {
-        if (comps.length >= MAX_COMPS) break;
-        const it = item as Record<string, unknown>;
-        const title = String(it.title ?? "");
-        const snippet = String(it.snippet ?? it.description ?? "");
-        const link = String(it.link ?? it.url ?? "");
-        if (!title || !link.startsWith("http")) continue;
-
-        const price = parsePriceINR(`${title} ${snippet}`);
-        if (price === null) continue; // uncertain price → drop the result
-
-        comps.push({ merchant: domainToMerchant(link), price, url: link });
-      }
+      conn.close();
+      __bdDebug.push(`BD ${name} (zone len=${z.length}): FULL response (${resp.length} bytes): ${JSON.stringify(resp.slice(0, 800))}`);
+    } catch (err) {
+      const e = err as Error;
+      __bdDebug.push(`BD ${name}: THREW ${e?.name ?? "unknown"} — ${(e?.message ?? String(err)).slice(0, 300)}`);
     }
-    return comps;
-  } catch {
-    return []; // never block an appraisal on a comp-lookup failure
-  } finally {
-    clearTimeout(timer);
   }
+  return []; // probe mode — parse wiring lands in the final fix
 }
 
 Deno.serve(async (req: Request) => {
@@ -413,5 +379,7 @@ Deno.serve(async (req: Request) => {
     confidence: Math.min(1, Math.max(0, num(parsed.confidence, 0.8))),
   };
 
+  const DEBUG = req.headers.get("x-kitna-debug") === "1";
+  if (DEBUG) return json({ ...result, _debug: __bdDebug }, 200);
   return json(result, 200);
 });
