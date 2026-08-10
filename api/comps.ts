@@ -1,17 +1,18 @@
 /**
  * Kitna? — Node.js comps proxy (Vercel serverless function).
  *
- * Why this exists: Supabase's Deno edge runtime cannot complete an HTTP/2
- * fetch to api.brightdata.com (known Deno runtime bug — "http2 error: stream
- * error detected: unspecific protocol error detected"), while the exact same
- * request succeeds from Node.js and curl. This function therefore hosts the
- * Bright Data call and the SERP parsing on Vercel's Node.js runtime; the
- * appraise Edge Function calls this endpoint with a shared secret.
+ * Why this exists: Supabase's edge runtime cannot complete an HTTP/2 fetch to
+ * api.brightdata.com (known runtime bug — "http2 error: stream error detected:
+ * unspecific protocol error detected"), while the exact same request succeeds
+ * from Node.js and curl. This function therefore hosts the Bright Data call
+ * and the SERP parsing on Vercel's Node.js runtime; the appraise Edge Function
+ * calls this endpoint with a shared secret.
  *
  * POST { searchQuery }  +  header x-kitna-key: <shared secret>
  * → 200 { comps: [{ merchant, price, url }, ...] }   (comps may be [])
  */
-export const config = { runtime: "nodejs" };
+
+import type { VercelRequest, VercelResponse } from "@vercel/node";
 
 const COMP_TIMEOUT_MS = 15000;
 const MAX_COMPS = 5;
@@ -95,102 +96,120 @@ function domainToMerchant(url: string): string {
   }
 }
 
-/* ── Handler ── */
+/* ── Handler (Vercel Node runtime) ── */
 
-function json(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "Content-Type": "application/json" },
-  });
-}
-
-export default async function handler(req: Request): Promise<Response> {
-  if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
-
-  // Shared secret — the endpoint must not be open to the world.
-  const sharedKey = process.env.KITNA_PROXY_KEY;
-  if (!sharedKey || req.headers.get("x-kitna-key") !== sharedKey) {
-    return json({ error: "Unauthorized" }, 401);
-  }
-
-  let body: { searchQuery?: unknown };
+export default async function handler(
+  req: VercelRequest,
+  res: VercelResponse,
+): Promise<void> {
   try {
-    body = await req.json();
-  } catch {
-    return json({ error: "Invalid JSON body" }, 400);
-  }
-  const searchQuery = typeof body.searchQuery === "string" ? body.searchQuery.trim() : "";
-  if (!searchQuery) return json({ error: "Missing 'searchQuery' field" }, 400);
+    // Reject non-POST before anything else.
+    if (req.method !== "POST") {
+      res.status(405).json({ error: "Method not allowed" });
+      return;
+    }
 
-  const token = process.env.BRIGHTDATA_TOKEN;
-  const zone = process.env.BRIGHTDATA_ZONE;
-  if (!token || !zone) {
-    return json({ error: "Bright Data not configured on this function" }, 503);
-  }
+    // Shared secret — the endpoint must not be open to the world.
+    const sharedKey = process.env.KITNA_PROXY_KEY;
+    if (!sharedKey || req.headers["x-kitna-key"] !== sharedKey) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
 
-  const target =
-    "https://www.google.com/search?q=" +
-    encodeURIComponent(`${searchQuery} used price india`) +
-    "&gl=in&hl=en&brd_json=1";
+    // Vercel may hand us an already-parsed object or a raw JSON string
+    // depending on the content type — handle both.
+    let raw: unknown = req.body;
+    if (typeof raw === "string") {
+      try {
+        raw = JSON.parse(raw);
+      } catch {
+        res.status(400).json({ error: "Invalid JSON body" });
+        return;
+      }
+    }
+    const body = (raw ?? {}) as Record<string, unknown>;
+    const searchQuery =
+      typeof body.searchQuery === "string" ? body.searchQuery.trim() : "";
+    if (!searchQuery) {
+      res.status(400).json({ error: "Missing 'searchQuery' field" });
+      return;
+    }
 
-  let resp: Response;
-  try {
-    resp = await fetch("https://api.brightdata.com/request", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ zone, url: target, format: "raw" }),
-      signal: AbortSignal.timeout(COMP_TIMEOUT_MS),
-    });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : "unknown error";
-    return json({ error: `Bright Data request failed: ${msg}` }, 502);
-  }
+    const token = process.env.BRIGHTDATA_TOKEN;
+    const zone = process.env.BRIGHTDATA_ZONE;
+    if (!token || !zone) {
+      res.status(503).json({ error: "Bright Data not configured on this function" });
+      return;
+    }
 
-  // Bright Data reports policy/zone errors as HTTP 200 with the real error in
-  // headers (x-brd-err-code / x-brd-error / proxy-status) and an empty body —
-  // surface those instead of silently treating the lookup as "no results".
-  const errCode = resp.headers.get("x-brd-err-code");
-  const errMsg = resp.headers.get("x-brd-error");
-  if (!resp.ok || errCode || errMsg) {
-    const text = await resp.text().catch(() => "");
-    return json(
-      {
+    const target =
+      "https://www.google.com/search?q=" +
+      encodeURIComponent(searchQuery + " used price india") +
+      "&gl=in&hl=en&brd_json=1";
+
+    let resp: Response;
+    try {
+      resp = await fetch("https://api.brightdata.com/request", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ zone, url: target, format: "raw" }),
+        signal: AbortSignal.timeout(COMP_TIMEOUT_MS),
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "unknown error";
+      res.status(502).json({ error: `Bright Data request failed: ${msg}` });
+      return;
+    }
+
+    // Bright Data reports policy/zone errors as HTTP 200 with the real error
+    // in headers (x-brd-err-code / x-brd-error / proxy-status) and an empty
+    // body — surface those instead of silently treating the lookup as
+    // "no results".
+    const errCode = resp.headers.get("x-brd-err-code");
+    const errMsg = resp.headers.get("x-brd-error");
+    if (!resp.ok || errCode || errMsg) {
+      const text = await resp.text().catch(() => "");
+      res.status(502).json({
         error:
           `BD lookup failed: status=${resp.status} errCode=${errCode ?? "-"} ` +
           `errMsg=${(errMsg || text).slice(0, 300)}`,
-      },
-      502,
-    );
-  }
-
-  // Bright Data brd_json returns the SERP object directly at the top level —
-  // no array wrapper, no stringified inner payload — with organic results in
-  // body.organic. Extract the first array container present, in preference
-  // order: organic → organic_results → items → results.
-  const serp = (await resp.json().catch(() => null)) as Record<string, unknown> | null;
-  const items = serp
-    ? (["organic", "organic_results", "items", "results"] as const)
-        .map((key) => serp[key])
-        .find((value) => Array.isArray(value)) as unknown[] | undefined
-    : undefined;
-
-  const comps: { merchant: string; price: number; url: string }[] = [];
-  for (const item of items ?? []) {
-    const rec = item as Record<string, unknown>;
-    const title = String(rec.title ?? "");
-    // brd_json organic entries expose link/description; keep url/snippet as
-    // fallbacks for other shapes.
-    const url = String(rec.link ?? rec.url ?? "");
-    const snippet = String(rec.snippet ?? rec.description ?? "");
-    const price = parsePriceINR(`${title} ${snippet}`);
-    if (price !== null && url.startsWith("http")) {
-      comps.push({ merchant: domainToMerchant(url), price, url });
+      });
+      return;
     }
-    if (comps.length >= MAX_COMPS) break;
-  }
 
-  return json({ comps });
+    // Bright Data brd_json returns the SERP object directly at the top level —
+    // no array wrapper, no stringified inner payload — with organic results in
+    // body.organic. Extract the first array container present, in preference
+    // order: organic → organic_results → items → results.
+    const serp = (await resp.json().catch(() => null)) as Record<string, unknown> | null;
+    const items = serp
+      ? (["organic", "organic_results", "items", "results"] as const)
+          .map((key) => serp[key])
+          .find((value) => Array.isArray(value)) as unknown[] | undefined
+      : undefined;
+
+    const comps: { merchant: string; price: number; url: string }[] = [];
+    for (const item of items ?? []) {
+      const rec = item as Record<string, unknown>;
+      const title = String(rec.title ?? "");
+      // brd_json organic entries expose link/description; keep url/snippet as
+      // fallbacks for other shapes.
+      const url = String(rec.link ?? rec.url ?? "");
+      const snippet = String(rec.snippet ?? rec.description ?? "");
+      const price = parsePriceINR(`${title} ${snippet}`);
+      if (price !== null && url.startsWith("http")) {
+        comps.push({ merchant: domainToMerchant(url), price, url });
+      }
+      if (comps.length >= MAX_COMPS) break;
+    }
+
+    // Zero comps is a valid result — never fabricate one.
+    res.status(200).json({ comps });
+  } catch (err) {
+    // Surface the real error message instead of a generic Vercel 500.
+    res.status(500).json({ error: String(err) });
+  }
 }
