@@ -25,7 +25,7 @@ export interface AppraisalResult {
   askingPrice: number;             // initial display price (same as suggestedPrice)
   walkAwayFloor: number;           // lowest acceptable offer
   counterLines: string[];          // e.g. ["That's a bit lower than I was hoping…", "Can we meet at ₹X?"]
-  confidence: number;              // 0–1 how sure the model is
+  confidence: number;              // 0–1 model self-report. NOT rendered — the UI derives its confidence chip from comparablePrices.length (>=3 high, 1–2 medium, 0 estimate-only).
 }
 
 export type ConditionGrade =

@@ -3,6 +3,8 @@ import { toast } from "sonner";
 import type { AppraisalResult, ConditionGrade } from "@/lib/types";
 import { CONDITION_COLORS } from "@/lib/types";
 import { formatINR } from "@/lib/currency";
+import { transcribeOnce } from "@/lib/speechmatics";
+import { feedbackForAttempt } from "@/lib/molbhaav";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -14,6 +16,10 @@ import {
   Sparkles,
   Target,
   ArrowRight,
+  Camera,
+  Handshake,
+  Mic,
+  Loader2,
 } from "lucide-react";
 
 interface ResultsScreenProps {
@@ -22,8 +28,6 @@ interface ResultsScreenProps {
   onCreateListing: () => void;
 }
 
-type PriceTab = "new" | "used";
-
 const CHANNEL_LABELS: Record<string, string> = {
   olx: "OLX",
   facebook: "Facebook Marketplace",
@@ -31,28 +35,50 @@ const CHANNEL_LABELS: Record<string, string> = {
   ebay: "eBay",
 };
 
+/* Confidence band — derived strictly from live comparable count.
+   Demo results always read "Estimate only", whatever the sample data holds. */
+type ConfidenceBand = "high" | "medium" | "estimate";
+
+function bandForCompCount(count: number): ConfidenceBand {
+  return count >= 3 ? "high" : count >= 1 ? "medium" : "estimate";
+}
+
+const CONFIDENCE_META: Record<ConfidenceBand, { label: string; className: string }> = {
+  high: {
+    label: "High confidence",
+    className: "bg-emerald-100 text-emerald-700 border-emerald-200",
+  },
+  medium: {
+    label: "Medium confidence",
+    className: "bg-amber-100 text-amber-700 border-amber-200",
+  },
+  estimate: {
+    label: "Estimate only",
+    className: "bg-orange-100 text-orange-700 border-orange-200",
+  },
+};
+
 export default function ResultsScreen({
   result,
   onReset,
   onCreateListing,
 }: ResultsScreenProps) {
-  const [priceTab, setPriceTab] = useState<PriceTab>("new");
   const [showTooltip, setShowTooltip] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [feedback, setFeedback] = useState<string | null>(null);
 
   const retailLabel = result.priceSource === "estimate" ? "Estimated new" : "New retail";
   const widthPct =
     result.retailPrice && result.retailPrice > 0
       ? Math.min(100, (result.resaleRangeHigh / result.retailPrice) * 100)
       : 0;
-  const confidencePct = Math.round(result.confidence * 100);
 
-  const comparableItems =
-    priceTab === "new"
-      ? result.comparablePrices
-      : [
-          { merchant: "OLX Used", price: result.resaleRangeLow, url: "#" },
-          { merchant: "OLX Used", price: result.resaleRangeHigh, url: "#" },
-        ];
+  const band: ConfidenceBand = result.isDemo
+    ? "estimate"
+    : bandForCompCount(result.comparablePrices.length);
+  const confidenceMeta = CONFIDENCE_META[band];
+
+  const showLiveComps = !result.isDemo && result.comparablePrices.length > 0;
 
   const handleCopySummary = useCallback(async () => {
     const summary = [
@@ -77,6 +103,22 @@ export default function ResultsScreen({
     }
   }, [result]);
 
+  const handlePractice = useCallback(async () => {
+    if (recording) return;
+    setRecording(true);
+    setFeedback(null);
+    try {
+      const { transcript } = await transcribeOnce(10);
+      setFeedback(feedbackForAttempt(result, transcript));
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Couldn't start voice practice", {
+        description: "Check that your mic is allowed for this site.",
+      });
+    } finally {
+      setRecording(false);
+    }
+  }, [recording, result]);
+
   return (
     <div className="min-h-screen bg-background">
       <div className="max-w-lg mx-auto px-4 py-6 sm:py-10 space-y-6">
@@ -85,32 +127,15 @@ export default function ResultsScreen({
           <p className="text-sm font-medium text-primary uppercase tracking-wider">
             Appraisal complete
           </p>
-          <div className="flex items-center justify-center gap-2 flex-wrap">
-            <h1 className="text-2xl font-heading font-semibold text-foreground">
-              {result.itemName}
-            </h1>
-            <Badge
-              variant="outline"
-              className="text-xs text-foreground/50 border-border"
-              title={`Model confidence: ${confidencePct}%`}
-            >
-              {confidencePct}% sure
-            </Badge>
-          </div>
+          <h1 className="text-2xl font-heading font-semibold text-foreground">
+            {result.itemName}
+          </h1>
           {result.brand && (
             <p className="text-sm text-foreground/45">{result.brand}</p>
           )}
         </header>
 
-        {/* Price API fallback alert */}
-        {result.priceSource === "estimate" && (
-          <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-            <span className="font-medium">ℹ️</span> Live prices unavailable — showing
-            category estimate.
-          </div>
-        )}
-
-        {/* Hero block: image + typical price + range */}
+        {/* Hero block: image + resale range + confidence chip */}
         <Card className="overflow-hidden shadow-card">
           <AspectRatio ratio={16 / 9}>
             <img
@@ -120,11 +145,16 @@ export default function ResultsScreen({
             />
           </AspectRatio>
           <CardContent className="pt-5 space-y-3">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-xs font-medium text-foreground/40 uppercase tracking-wider">
+                Your resale value
+              </p>
+              <Badge variant="outline" className={`text-[10px] ${confidenceMeta.className}`}>
+                {confidenceMeta.label}
+              </Badge>
+            </div>
+            <div className="flex items-start justify-between gap-3">
               <div className="space-y-0.5">
-                <p className="text-xs font-medium text-foreground/40 uppercase tracking-wider">
-                  Your resale value
-                </p>
                 <div className="flex items-baseline gap-1.5">
                   <span className="text-4xl font-heading font-bold text-primary tracking-tight">
                     {formatINR(result.resaleRangeLow)}
@@ -148,9 +178,9 @@ export default function ResultsScreen({
                   onMouseEnter={() => setShowTooltip(true)}
                   onMouseLeave={() => setShowTooltip(false)}
                   aria-label="How this estimate is calculated"
-                  className="w-8 h-8 rounded-full bg-muted flex items-center justify-center hover:bg-border transition-colors cursor-pointer"
+                  className="w-8 h-8 rounded-full bg-muted flex items-center justify-center hover:bg-border transition-colors cursor-pointer active:scale-[0.97]"
                 >
-                  <Info className="w-4 h-4 text-foreground/50" />
+                  <Info className="w-4 h-4 text-foreground/50" aria-hidden="true" />
                 </button>
                 {showTooltip && (
                   <div className="absolute right-0 top-10 z-10 w-64 rounded-xl bg-foreground text-white text-xs p-4 shadow-xl animate-in fade-in slide-in-from-top-2 duration-200">
@@ -169,11 +199,43 @@ export default function ResultsScreen({
           </CardContent>
         </Card>
 
+        {/* What I saw in your photo — evidence pinned to the image */}
+        <Card className="shadow-card">
+          <CardContent className="p-5 space-y-3">
+            <div className="flex items-center gap-2">
+              <Camera className="w-4 h-4 text-primary" aria-hidden="true" />
+              <p className="text-xs font-medium text-primary uppercase tracking-wider">
+                What I saw in your photo
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <Badge
+                variant="primary"
+                className={CONDITION_COLORS[result.conditionGrade as ConditionGrade]}
+              >
+                {result.conditionGrade}
+              </Badge>
+            </div>
+            <p className="text-sm text-foreground/70 leading-relaxed">
+              {result.conditionNotes}
+            </p>
+            {result.keyAttributes.length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {result.keyAttributes.map((attr) => (
+                  <Badge key={attr} variant="outline" className="text-xs">
+                    {attr}
+                  </Badge>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
         {/* Best move card */}
         <Card className="shadow-card border-primary/20">
           <CardContent className="p-5 space-y-3">
             <div className="flex items-center gap-2">
-              <Sparkles className="w-4 h-4 text-primary" />
+              <Sparkles className="w-4 h-4 text-primary" aria-hidden="true" />
               <p className="text-xs font-medium text-primary uppercase tracking-wider">
                 Best move
               </p>
@@ -194,12 +256,92 @@ export default function ResultsScreen({
               .
             </p>
             <div className="flex items-center gap-2 pt-1">
-              <Target className="w-4 h-4 text-foreground/30" />
+              <Target className="w-4 h-4 text-foreground/30" aria-hidden="true" />
               <p className="text-xs text-foreground/50">
                 Ask {formatINR(result.suggestedPrice)} &middot; floor{" "}
                 {formatINR(result.walkAwayFloor)}
               </p>
             </div>
+          </CardContent>
+        </Card>
+
+        {/* Mol-bhaav — haggle like a local */}
+        <Card className="shadow-card border-amber-200/60">
+          <CardContent className="p-5 space-y-3">
+            <div className="flex items-center justify-between">
+              <p className="text-xs font-medium text-amber-700 uppercase tracking-wider">
+                Mol-bhaav — haggle like a local
+              </p>
+              <Handshake className="w-4 h-4 text-amber-600" aria-hidden="true" />
+            </div>
+
+            <div className="flex items-center gap-2 text-sm">
+              <span className="text-foreground/60">
+                Ask{" "}
+                <span className="font-semibold text-foreground">
+                  {formatINR(result.askingPrice)}
+                </span>
+              </span>
+              <span className="text-foreground/25">&middot;</span>
+              <span className="text-foreground/60">
+                Floor{" "}
+                <span className="font-semibold text-foreground">
+                  {formatINR(result.walkAwayFloor)}
+                </span>
+              </span>
+            </div>
+
+            {result.counterLines[0] && (
+              <blockquote className="rounded-lg bg-amber-50 border border-amber-100 px-4 py-3 text-sm text-amber-900">
+                “{result.counterLines[0]}”
+              </blockquote>
+            )}
+
+            <div className="flex gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                className="flex-1"
+                onClick={onCreateListing}
+              >
+                See full script
+                <ArrowRight className="w-4 h-4" aria-hidden="true" />
+              </Button>
+              <button
+                type="button"
+                onClick={handlePractice}
+                disabled={recording}
+                aria-label={
+                  recording
+                    ? "Recording — wait for feedback"
+                    : "Practice your counter out loud"
+                }
+                className={`inline-flex items-center justify-center gap-2 rounded-lg px-3.5 py-2 text-xs font-semibold transition-all duration-200 cursor-pointer active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ${
+                  recording
+                    ? "bg-red-100 text-red-700 border border-red-200 animate-pulse motion-reduce:animate-none"
+                    : "bg-amber-500 text-white hover:bg-amber-600 shadow-sm"
+                }`}
+              >
+                {recording ? (
+                  <Loader2
+                    className="w-4 h-4 animate-spin motion-reduce:animate-none"
+                    aria-hidden="true"
+                  />
+                ) : (
+                  <Mic className="w-4 h-4" aria-hidden="true" />
+                )}
+                {recording ? "Listening…" : "Practice"}
+              </button>
+            </div>
+
+            {feedback && (
+              <p
+                role="status"
+                className="rounded-lg bg-amber-50 border border-amber-100 px-4 py-3 text-sm text-amber-900 animate-in fade-in slide-in-from-bottom-2 duration-300"
+              >
+                {feedback}
+              </p>
+            )}
           </CardContent>
         </Card>
 
@@ -259,103 +401,57 @@ export default function ResultsScreen({
           </Card>
         )}
 
-        {/* Condition read */}
+        {/* Comparable prices — real listings only */}
         <Card className="shadow-card">
           <CardContent className="p-5 space-y-3">
             <p className="text-xs font-medium text-foreground/40 uppercase tracking-wider">
-              Condition
+              Comparable prices
             </p>
-            <div className="flex items-center gap-2">
-              <Badge
-                variant="primary"
-                className={CONDITION_COLORS[result.conditionGrade as ConditionGrade]}
-              >
-                {result.conditionGrade}
-              </Badge>
-            </div>
-            <p className="text-sm text-foreground/70 leading-relaxed">
-              {result.conditionNotes}
-            </p>
-            {result.keyAttributes.length > 0 && (
-              <div className="flex flex-wrap gap-1.5">
-                {result.keyAttributes.map((attr) => (
-                  <Badge key={attr} variant="outline" className="text-xs">
-                    {attr}
-                  </Badge>
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
 
-        {/* Comparable prices */}
-        <Card className="shadow-card">
-          <CardContent className="p-5 space-y-3">
-            <div className="flex items-center justify-between">
-              <p className="text-xs font-medium text-foreground/40 uppercase tracking-wider">
-                Comparable prices
-              </p>
-              {/* Tabs */}
-              <div className="flex gap-1 rounded-lg bg-muted p-0.5">
-                <button
-                  onClick={() => setPriceTab("new")}
-                  className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all duration-200 cursor-pointer ${
-                    priceTab === "new"
-                      ? "bg-white text-foreground shadow-sm"
-                      : "text-foreground/50 hover:text-foreground"
-                  }`}
-                >
-                  Buy new
-                </button>
-                <button
-                  onClick={() => setPriceTab("used")}
-                  className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all duration-200 cursor-pointer ${
-                    priceTab === "used"
-                      ? "bg-white text-foreground shadow-sm"
-                      : "text-foreground/50 hover:text-foreground"
-                  }`}
-                >
-                  Used nearby
-                </button>
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              {comparableItems.map((item, i) => (
-                <div
-                  key={i}
-                  className="flex items-center justify-between py-2.5 border-b border-border last:border-0"
-                >
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium text-foreground/70">
-                      {item.merchant}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-semibold text-foreground">
-                      {formatINR(item.price)}
-                    </span>
-                    {item.url && priceTab === "new" && (
-                      <a
-                        href={item.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-primary hover:text-primary/70 transition-colors"
-                      >
-                        <ExternalLink className="w-3.5 h-3.5" />
-                      </a>
-                    )}
-                  </div>
+            {showLiveComps ? (
+              <>
+                <p className="text-sm text-foreground/70">
+                  Based on{" "}
+                  <span className="font-semibold text-foreground">
+                    {result.comparablePrices.length}
+                  </span>{" "}
+                  live listing{result.comparablePrices.length === 1 ? "" : "s"}
+                </p>
+                <div className="flex gap-2 overflow-x-auto pb-1 snap-x">
+                  {result.comparablePrices.map((comp, i) => (
+                    <a
+                      key={i}
+                      href={comp.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="group shrink-0 snap-start w-40 rounded-xl border border-border bg-muted/50 p-3 hover:border-primary/40 hover:shadow-card transition-all duration-200 cursor-pointer"
+                    >
+                      <span className="block text-[10px] font-semibold uppercase tracking-wider text-foreground/40 mb-1 truncate">
+                        {comp.merchant}
+                      </span>
+                      <span className="block text-base font-bold text-foreground">
+                        {formatINR(comp.price)}
+                      </span>
+                      <span className="inline-flex items-center gap-1 text-[10px] font-medium text-primary mt-1.5">
+                        View listing
+                        <ExternalLink className="w-3 h-3" aria-hidden="true" />
+                      </span>
+                    </a>
+                  ))}
                 </div>
-              ))}
-            </div>
+              </>
+            ) : (
+              <p className="text-sm text-foreground/45">
+                Live comps unavailable, showing a model estimate.
+              </p>
+            )}
           </CardContent>
         </Card>
 
         {/* Create listing CTA */}
         <Button size="lg" onClick={onCreateListing} className="w-full">
           Create my listing
-          <ArrowRight className="w-4 h-4" />
+          <ArrowRight className="w-4 h-4" aria-hidden="true" />
         </Button>
 
         {/* Copy summary */}
@@ -374,7 +470,7 @@ export default function ResultsScreen({
             onClick={onReset}
             className="inline-flex items-center gap-2 text-sm font-medium text-primary hover:text-primary/70 transition-colors cursor-pointer"
           >
-            <RefreshCw className="w-4 h-4" />
+            <RefreshCw className="w-4 h-4" aria-hidden="true" />
             Appraise another item
           </button>
         </div>

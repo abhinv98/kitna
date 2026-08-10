@@ -1,12 +1,12 @@
 # Kitna? — Instant Item Appraisal &amp; Resale Value
 
-Point your camera at any object (or upload a photo) and get an instant appraisal: what it is, its condition, a resale price range, and a ready-to-post marketplace listing — in under 10 seconds.
+**Submission — Kitna? is a camera-first resale appraiser for India, built for people decluttering or upgrading who have no idea what their stuff is worth.** Point your phone at anything and get a condition grade traceable to the specific wear visible in your own photo, a rupee resale range traceable to live marketplace listings pulled through Bright Data, a recommendation of where to sell for the best net, a ready-to-paste listing, and a Hindi-English Mol-bhaav script with your asking price and walk-away floor. Every number is labelled by confidence, and a price is never shown as live unless real listings back it. Built solo in native.builder.
 
 ## Tech Stack
 
 - **Frontend:** Vite + React 18 + TypeScript
 - **Styling:** Tailwind CSS v4 + shadcn/ui (custom money-green theme)
-- **Backend:** Supabase Edge Function (Deno) — vision AI via AIMLAPI
+- **Backend:** Supabase Edge Function (Deno) — vision AI via AIMLAPI, live comparable listings via Bright Data, voice practice via Speechmatics
 - **Fonts:** Varela Round (headings) + Nunito Sans (body)
 
 ## Quick Start
@@ -30,7 +30,10 @@ Live mode uses the [AIMLAPI](https://aimlapi.com) vision API to analyze real pho
    - Go to your Supabase dashboard → Edge Functions → `appraise` → Secrets
    - Add `AIMLAPI_KEY`
 
-Optional: `BRIGHTDATA_TOKEN` for live comparable-price lookups.
+Optional: `BRIGHTDATA_TOKEN` + `BRIGHTDATA_ZONE` to fetch live comparable
+prices (a price is only shown as "live" when a real listing is parsed —
+otherwise the appraisal falls back to the model's estimate). Optional:
+`SPEECHMATICS_API_KEY` for voice Mol-bhaav practice on the results screen.
 
 ## Project Structure
 
