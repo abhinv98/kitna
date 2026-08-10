@@ -14,7 +14,9 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
  * priceSource is "live" only when at least one real comparable price was
  * parsed from a Bright Data Google SERP lookup; otherwise "estimate" with
  * comparablePrices []. A bad or missing lookup NEVER blocks the appraisal —
- * it degrades silently to the model's estimate.
+ * it degrades silently to the model's estimate. Lookup failures are recorded
+ * in _debug (x-kitna-debug: 1) so the actual Bright Data error is visible
+ * instead of being hidden.
  *
  * Auth: the client calls this from the browser using the project's
  * publishable key (sb_publishable_...), which is public by design and is not
@@ -29,7 +31,7 @@ const CORS = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
-// TEMP diagnostics for the Bright Data parse investigation — removed once fixed.
+// Diagnostics for the Bright Data lookup — surfaced via x-kitna-debug: 1.
 const __bdDebug: string[] = [];
 
 const VALID_GRADES = ["Mint", "Excellent", "Good", "Fair", "Poor"];
@@ -202,16 +204,18 @@ function domainToMerchant(url: string): string {
 }
 
 /**
- * Fetch up to 5 real comparable listings for the item via Bright Data.
- * Wrapped in its own try/catch + 6s timeout — any failure returns [] and the
- * appraisal degrades silently to the model's estimate. A price is only ever
- * included when it can be parsed confidently from the listing copy.
+ * Fetch up to 5 real comparable listings for the item via Bright Data's
+ * /request API using plain fetch(). Wrapped in its own try/catch + 6s
+ * timeout — any failure returns [] and the appraisal degrades silently to
+ * the model's estimate. Failures are recorded in __bdDebug so the ACTUAL
+ * error (status code or Bright Data's x-brd-err-code/x-brd-error headers)
+ * is visible in the _debug payload instead of being swallowed.
  */
 async function fetchLiveComps(searchQuery: string): Promise<ComparablePrice[]> {
   const token = Deno.env.get("BRIGHTDATA_TOKEN");
   const zone = Deno.env.get("BRIGHTDATA_ZONE");
   if (!token || !zone) {
-    __bdDebug.push(`BD config: token set = ${!!token} | zone set = ${!!zone}`);
+    __bdDebug.push(`BD config missing: token=${!!token} zone=${!!zone}`);
     return [];
   }
 
@@ -220,36 +224,74 @@ async function fetchLiveComps(searchQuery: string): Promise<ComparablePrice[]> {
     encodeURIComponent(`${searchQuery} used price india`) +
     "&gl=in&hl=en&brd_json=1";
 
-  // TEMP probe round 4 — full response with stored zone vs invalid zone.
-  const payload = JSON.stringify({ zone, url: target, format: "raw" });
-  for (const [name, z] of [["stored-zone", zone], ["invalid-zone", "definitely_not_a_real_zone_xyz"]] as Array<[string, string]>) {
-    try {
-      const conn = await Deno.connectTls({ hostname: "api.brightdata.com", port: 443 });
-      const req =
-        `POST /request HTTP/1.1\r\n` +
-        `Host: api.brightdata.com\r\n` +
-        `Authorization: Bearer ${token}\r\n` +
-        `Content-Type: application/json\r\n` +
-        `Content-Length: ${JSON.stringify({ zone: z, url: target, format: "raw" }).length}\r\n` +
-        `Connection: close\r\n\r\n` +
-        JSON.stringify({ zone: z, url: target, format: "raw" });
-      await conn.write(new TextEncoder().encode(req));
-      const buf = new Uint8Array(65536);
-      let resp = "";
-      for (let i = 0; i < 2000; i++) {
-        const n = await conn.read(buf);
-        if (n === null) break;
-        resp += new TextDecoder().decode(buf.subarray(0, n));
-        if (resp.length > 200000) break;
-      }
-      conn.close();
-      __bdDebug.push(`BD ${name} (zone len=${z.length}): FULL response (${resp.length} bytes): ${JSON.stringify(resp.slice(0, 800))}`);
-    } catch (err) {
-      const e = err as Error;
-      __bdDebug.push(`BD ${name}: THREW ${e?.name ?? "unknown"} — ${(e?.message ?? String(err)).slice(0, 300)}`);
-    }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), COMP_TIMEOUT_MS);
+
+  let resp: Response;
+  try {
+    resp = await fetch("https://api.brightdata.com/request", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ zone, url: target, format: "raw" }),
+      signal: controller.signal,
+    });
+  } catch (err) {
+    clearTimeout(timeout);
+    const msg = err instanceof Error && err.name === "AbortError"
+      ? `Bright Data request timed out after ${COMP_TIMEOUT_MS}ms`
+      : `Bright Data request failed: ${err instanceof Error ? err.message : "unknown error"}`;
+    __bdDebug.push(`BD fetch threw: ${msg}`);
+    return [];
   }
-  return []; // probe mode — parse wiring lands in the final fix
+  clearTimeout(timeout);
+
+  // Bright Data reports policy/zone errors as HTTP 200 with the real error in
+  // headers (x-brd-err-code / x-brd-error / proxy-status) and an empty body —
+  // surface those instead of silently treating the lookup as "no results".
+  const errCode = resp.headers.get("x-brd-err-code");
+  const errMsg = resp.headers.get("x-brd-error");
+  if (!resp.ok || errCode || errMsg) {
+    const body = await resp.text().catch(() => "");
+    __bdDebug.push(
+      `BD lookup failed: status=${resp.status} errCode=${errCode ?? "-"} errMsg=${(errMsg || body).slice(0, 300)}`,
+    );
+    return [];
+  }
+
+  const data = await resp.json().catch(() => null);
+  const items = Array.isArray(data)
+    ? data
+    : Array.isArray((data as { data?: unknown } | null)?.data)
+      ? (data as { data: unknown[] }).data
+      : null;
+
+  if (!items || items.length === 0) {
+    __bdDebug.push("BD lookup returned no items");
+    return [];
+  }
+
+  const comps: ComparablePrice[] = [];
+  for (const item of items) {
+    const rec = item as Record<string, unknown>;
+    const title = String(rec.title ?? "");
+    const url = String(rec.url ?? "");
+    const snippet = String(rec.snippet ?? "");
+    const price = parsePriceINR(`${title} ${snippet}`);
+    if (price !== null && url) {
+      comps.push({ merchant: domainToMerchant(url), price, url });
+    }
+    if (comps.length >= MAX_COMPS) break;
+  }
+
+  if (comps.length === 0) {
+    __bdDebug.push("BD lookup ok but no parseable INR prices in SERP items");
+  } else {
+    __bdDebug.push(`BD lookup ok: ${comps.length} comparable prices parsed`);
+  }
+  return comps;
 }
 
 Deno.serve(async (req: Request) => {
