@@ -69,9 +69,11 @@ export default function AnalyzingScreen({
     };
   }, [session, onComplete]);
 
-  // Live appraisal pipeline — real AI call, progressive reveal, retryable
+  // Live appraisal pipeline — real AI call, progressive reveal, retryable.
+  // Runs for live sessions AND for demo sessions without a selected demo
+  // object, so no session can ever stall with no active effect.
   useEffect(() => {
-    if (session.isDemo) return;
+    if (session.isDemo && session.demoObject) return;
 
     let cancelled = false;
     const timers: number[] = [];
@@ -256,7 +258,7 @@ export default function AnalyzingScreen({
         )}
 
         {/* Caption for demo mode */}
-        {session.isDemo && (
+        {session.isDemo && session.demoObject && (
           <p className="text-center text-xs text-foreground/35">
             Demo mode &middot; results are pre-cached
           </p>

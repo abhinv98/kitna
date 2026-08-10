@@ -37,7 +37,6 @@ export default function CaptureScreen({ onCapture }: CaptureScreenProps) {
     const reader = new FileReader();
     reader.onload = () => {
       setUploadedImage(reader.result as string);
-      setSelectedDemoObject(null);
     };
     reader.readAsDataURL(file);
   }, []);
