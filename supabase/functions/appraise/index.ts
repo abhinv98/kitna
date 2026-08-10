@@ -207,7 +207,10 @@ function domainToMerchant(url: string): string {
 async function fetchLiveComps(searchQuery: string): Promise<ComparablePrice[]> {
   const token = Deno.env.get("BRIGHTDATA_TOKEN");
   const zone = Deno.env.get("BRIGHTDATA_ZONE");
-  if (!token || !zone) return [];
+  if (!token || !zone) {
+    console.log("BD config: token set =", !!token, "| zone set =", !!zone);
+    return [];
+  }
 
   const target =
     "https://www.google.com/search?q=" +
@@ -218,7 +221,7 @@ async function fetchLiveComps(searchQuery: string): Promise<ComparablePrice[]> {
   const timer = setTimeout(() => controller.abort(), COMP_TIMEOUT_MS);
 
   try {
-    const resp = await fetch("https://api.brightdata.com/requestAuthorization", {
+    const resp = await fetch("https://api.brightdata.com/request", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${token}`,
@@ -227,9 +230,22 @@ async function fetchLiveComps(searchQuery: string): Promise<ComparablePrice[]> {
       body: JSON.stringify({ zone, url: target, format: "raw" }),
       signal: controller.signal,
     });
-    if (!resp.ok) return [];
+    if (!resp.ok) {
+      console.log("BD non-ok:", resp.status, (await resp.text().catch(() => "")).slice(0, 300));
+      return [];
+    }
 
-    const body = (await resp.json().catch(() => null)) as Record<string, unknown> | null;
+    const rawText = await resp.text().catch(() => "");
+    console.log("BD status:", resp.status, "| content-type:", resp.headers.get("content-type") ?? "");
+    let body: Record<string, unknown> | null = null;
+    try {
+      body = JSON.parse(rawText) as Record<string, unknown>;
+    } catch {
+      body = null;
+    }
+    console.log("BD raw preview:", JSON.stringify(rawText.slice(0, 400)));
+    console.log("BD top-level keys:", body ? Object.keys(body) : "null body");
+    console.log("BD sample:", body ? JSON.stringify(body).slice(0, 1500) : "null body");
     if (!body) return [];
 
     const entries = Array.isArray(body.result)
