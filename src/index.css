@@ -36,4 +36,26 @@
 
   /* Animation */
   --ease-out: cubic-bezier(0, 0, 0.2, 1);
+
+  /* Scan screen — sweeping scan line */
+  --animate-scan: scan 1.3s cubic-bezier(0.4, 0, 0.2, 1) infinite alternate;
+  @keyframes scan {
+    from {
+      top: 0%;
+    }
+    to {
+      top: calc(100% - 2rem);
+    }
+  }
+
+  /* Scan screen — auto-continue countdown fill */
+  --animate-scan-fill: scan-fill 1.6s linear forwards;
+  @keyframes scan-fill {
+    from {
+      width: 100%;
+    }
+    to {
+      width: 0%;
+    }
+  }
 }

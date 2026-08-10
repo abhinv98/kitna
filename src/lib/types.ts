@@ -45,10 +45,12 @@ export interface AppraisalSession {
   image: string;
   isDemo: boolean;
   demoObject?: string;
+  /** Friendly label of the object detected during the scan step, e.g. "Mug or Cup". */
+  detectedObject?: string;
   result?: AppraisalResult;
 }
 
-export type AppScreen = "capture" | "analyzing" | "results" | "listing";
+export type AppScreen = "capture" | "scan" | "analyzing" | "results" | "listing";
 
 export const CONDITION_COLORS: Record<ConditionGrade, string> = {
   Mint: "bg-emerald-100 text-emerald-700 border-emerald-200",

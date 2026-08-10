@@ -1,10 +1,15 @@
-import { useState } from "react";
+import { lazy, Suspense, useState } from "react";
 import { Toaster } from "sonner";
+import { Loader2 } from "lucide-react";
 import CaptureScreen from "@/components/CaptureScreen";
 import AnalyzingScreen from "@/components/AnalyzingScreen";
 import ResultsScreen from "@/components/ResultsScreen";
 import ListingScreen from "@/components/ListingScreen";
 import type { AppScreen, AppraisalSession, AppraisalResult } from "@/lib/types";
+
+// Lazy — the scan screen pulls in TensorFlow.js + COCO-SSD, which should
+// only load when the user actually reaches the scan step.
+const ScanScreen = lazy(() => import("@/components/ScanScreen"));
 
 export default function App() {
   const [screen, setScreen] = useState<AppScreen>("capture");
@@ -14,7 +19,21 @@ export default function App() {
   const handleCapture = (data: AppraisalSession) => {
     setSession(data);
     setResult(null);
+    // Demo mode uses pre-cached results — skip the on-device scan.
+    setScreen(data.isDemo ? "analyzing" : "scan");
+  };
+
+  const handleScanComplete = (detectedObject: string | null) => {
+    setSession((prev) =>
+      prev ? { ...prev, detectedObject: detectedObject ?? undefined } : prev,
+    );
     setScreen("analyzing");
+  };
+
+  const handleScanBack = () => {
+    setSession(null);
+    setResult(null);
+    setScreen("capture");
   };
 
   const handleAnalysisComplete = (appraisal: AppraisalResult) => {
@@ -48,6 +67,24 @@ export default function App() {
 
       <main id="main-content">
         {screen === "capture" && <CaptureScreen onCapture={handleCapture} />}
+        {screen === "scan" && session && (
+          <Suspense
+            fallback={
+              <div className="min-h-screen bg-background flex items-center justify-center p-4">
+                <div className="text-center space-y-3">
+                  <Loader2 className="w-6 h-6 text-primary animate-spin mx-auto" />
+                  <p className="text-sm text-foreground/50">Starting scanner&hellip;</p>
+                </div>
+              </div>
+            }
+          >
+            <ScanScreen
+              session={session}
+              onComplete={handleScanComplete}
+              onBack={handleScanBack}
+            />
+          </Suspense>
+        )}
         {screen === "analyzing" && session && (
           <AnalyzingScreen
             session={session}

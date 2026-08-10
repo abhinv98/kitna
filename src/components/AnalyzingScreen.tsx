@@ -111,10 +111,12 @@ export default function AnalyzingScreen({
   }, []);
 
   const stepIndex = PHASE_ORDER.indexOf(phase);
+  // Live sessions: show the object detected during the scan step; demo
+  // sessions show the pre-cached item name.
   const itemName =
     session.isDemo && session.demoObject
       ? DEMO_RESULTS[session.demoObject as ExampleObject]?.itemName
-      : null;
+      : session.detectedObject ?? null;
 
   const conditionGrade =
     session.isDemo && session.demoObject
