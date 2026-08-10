@@ -87,5 +87,23 @@ export function useWebcam() {
     };
   }, [startCamera, stopCamera]);
 
+  // The <video> element only mounts once cameraState becomes "active", which
+  // happens after getUserMedia resolves. By then the in-function attachment
+  // in startCamera was a no-op (videoRef.current was null), so attach the
+  // already-acquired stream here once the element exists.
+  useEffect(() => {
+    if (cameraState !== "active") return;
+
+    const video = videoRef.current;
+    const stream = streamRef.current;
+    if (!video || !stream) return;
+
+    video.srcObject = stream;
+    video.play().catch(() => {
+      // Element is muted + playsInline, so this should not reject in
+      // practice; swallow autoplay errors instead of surfacing them.
+    });
+  }, [cameraState]);
+
   return { videoRef, cameraState, error, captureFrame, startCamera };
 }
