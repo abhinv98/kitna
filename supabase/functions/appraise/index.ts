@@ -12,11 +12,11 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
  * src/lib/appraise.ts (validateResult).
  *
  * priceSource is "live" only when at least one real comparable price was
- * parsed from a Bright Data Google SERP lookup; otherwise "estimate" with
- * comparablePrices []. A bad or missing lookup NEVER blocks the appraisal —
- * it degrades silently to the model's estimate. Lookup failures are recorded
- * in _debug (x-kitna-debug: 1) so the actual Bright Data error is visible
- * instead of being hidden.
+ * parsed from a Google SERP lookup via the Node.js comps proxy (Vercel);
+ * otherwise "estimate" with comparablePrices []. A bad or missing lookup
+ * NEVER blocks the appraisal — it degrades silently to the model's estimate.
+ * Lookup failures are recorded in _debug (x-kitna-debug: 1) so the actual
+ * proxy error is visible instead of being hidden.
  *
  * Auth: the client calls this from the browser using the project's
  * publishable key (sb_publishable_...), which is public by design and is not
@@ -31,7 +31,7 @@ const CORS = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
-// Diagnostics for the Bright Data lookup — surfaced via x-kitna-debug: 1.
+// Diagnostics for the comps lookup — surfaced via x-kitna-debug: 1.
 const __bdDebug: string[] = [];
 
 const VALID_GRADES = ["Mint", "Excellent", "Good", "Fair", "Poor"];
@@ -115,7 +115,7 @@ function num(raw: unknown, fallback: number): number {
   return Number.isFinite(n) && n >= 0 ? n : fallback;
 }
 
-/* ── Phase 2 — live comparable prices (Bright Data) ────────────────────── */
+/* ── Phase 2 — live comparable prices (Node.js comps proxy) ────────────── */
 
 interface ComparablePrice {
   merchant: string;
@@ -124,179 +124,72 @@ interface ComparablePrice {
 }
 
 const COMP_TIMEOUT_MS = 6000;
-const MAX_COMPS = 5;
-const MIN_PRICE = 50;
-const MAX_PRICE = 5000000;
 
 /**
- * Parse a plausible INR price out of a listing title/snippet.
- * Returns null when we cannot confidently extract one — never guess.
- */
-function parsePriceINR(text: string): number | null {
-  const t = text.replace(/,/g, "");
-
-  // Explicit currency marker: "₹5,000", "Rs 12000", "INR 15k", "1.2 lakh"
-  const currency = t.match(
-    /(?:₹|rs\.?|inr|rupees?|रु)\s*(\d+(?:\.\d+)?)(?:\s*(k|lakh|lacs?))?/i,
-  );
-  if (currency) {
-    const n = Number(currency[1]);
-    const suffix = (currency[2] ?? "").toLowerCase();
-    const value = suffix.startsWith("l") ? n * 100000 : suffix ? n * 1000 : n;
-    return value >= MIN_PRICE && value <= MAX_PRICE ? Math.round(value) : null;
-  }
-
-  // Suffixed number: "12k" or "1.2 lakh"
-  const suffixed = t.match(/\b(\d+(?:\.\d+)?)\s*(lakh|lacs?|k)\b/i);
-  if (suffixed) {
-    const n = Number(suffixed[1]);
-    const suffix = suffixed[2].toLowerCase();
-    const value = suffix.startsWith("l") ? n * 100000 : n * 1000;
-    return value >= MIN_PRICE && value <= MAX_PRICE ? Math.round(value) : null;
-  }
-
-  // Bare number, only when the copy clearly reads like a listing price.
-  if (/(?:price|asking|selling|for\s*sale|offer|negotiable|wanted)/i.test(t)) {
-    const bare = t.match(/\b(\d{3,7})\b/);
-    if (bare) {
-      const n = Number(bare[1]);
-      return n >= MIN_PRICE && n <= MAX_PRICE ? n : null;
-    }
-  }
-
-  return null;
-}
-
-const MERCHANT_LABELS: Record<string, string> = {
-  olx: "OLX",
-  quikr: "Quikr",
-  ebay: "eBay",
-  amazon: "Amazon",
-  flipkart: "Flipkart",
-  facebook: "Facebook Marketplace",
-  instagram: "Instagram",
-  snapdeal: "Snapdeal",
-  shopclues: "ShopClues",
-  meesho: "Meesho",
-  croma: "Croma",
-  reliancedigital: "Reliance Digital",
-  headphonezone: "Headphone Zone",
-  myntra: "Myntra",
-  superkicks: "Superkicks",
-  apple: "Apple India",
-  nike: "Nike India",
-  paytm: "Paytm Mall",
-};
-
-/** Derive a human merchant label from a listing URL's domain. */
-function domainToMerchant(url: string): string {
-  try {
-    const host = new URL(url).hostname.replace(/^www\./, "");
-    let base = host.split(".")[0];
-    if (["m", "mobile", "in", "en", "www"].includes(base)) {
-      base = host.split(".")[1] ?? base;
-    }
-    return MERCHANT_LABELS[base] ??
-      (base.charAt(0).toUpperCase() + base.slice(1));
-  } catch {
-    return "Marketplace";
-  }
-}
-
-/**
- * Fetch up to 5 real comparable listings for the item via Bright Data's
- * /request API using plain fetch(). Wrapped in its own try/catch + 6s
- * timeout — any failure returns [] and the appraisal degrades silently to
- * the model's estimate. Failures are recorded in __bdDebug so the ACTUAL
- * error (status code or Bright Data's x-brd-err-code/x-brd-error headers)
- * is visible in the _debug payload instead of being swallowed.
+ * Fetch up to 5 real comparable listings for the item.
+ *
+ * The Bright Data call itself lives in a Node.js serverless function
+ * (api/comps.ts on Vercel) because the Supabase Deno edge runtime cannot
+ * complete an HTTP/2 fetch to api.brightdata.com (known Deno runtime bug),
+ * while Node.js succeeds. This function calls that proxy — POST
+ * { searchQuery } with the shared x-kitna-key header — and reads { comps }
+ * back. Wrapped in its own try/catch + 6s timeout: any failure returns []
+ * and the appraisal degrades silently to the model's estimate. Failures are
+ * recorded in __bdDebug so the actual proxy error is visible in the _debug
+ * payload instead of being swallowed.
  */
 async function fetchLiveComps(searchQuery: string): Promise<ComparablePrice[]> {
-  const token = Deno.env.get("BRIGHTDATA_TOKEN");
-  const zone = Deno.env.get("BRIGHTDATA_ZONE");
-  if (!token || !zone) {
-    __bdDebug.push(`BD config missing: token=${!!token} zone=${!!zone}`);
+  const proxyUrl = Deno.env.get("COMPS_PROXY_URL");
+  const key = Deno.env.get("KITNA_PROXY_KEY");
+  if (!proxyUrl || !key) {
+    __bdDebug.push(`Comps proxy config missing: url=${!!proxyUrl} key=${!!key}`);
     return [];
   }
-
-  const target =
-    "https://www.google.com/search?q=" +
-    encodeURIComponent(`${searchQuery} used price india`) +
-    "&gl=in&hl=en&brd_json=1";
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), COMP_TIMEOUT_MS);
 
   let resp: Response;
   try {
-    resp = await fetch("https://api.brightdata.com/request", {
+    resp = await fetch(proxyUrl, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
+        "x-kitna-key": key,
       },
-      body: JSON.stringify({ zone, url: target, format: "raw" }),
+      body: JSON.stringify({ searchQuery }),
       signal: controller.signal,
     });
   } catch (err) {
     clearTimeout(timeout);
     const msg = err instanceof Error && err.name === "AbortError"
-      ? `Bright Data request timed out after ${COMP_TIMEOUT_MS}ms`
-      : `Bright Data request failed: ${err instanceof Error ? err.message : "unknown error"}`;
-    __bdDebug.push(`BD fetch threw: ${msg}`);
+      ? `Comps proxy timed out after ${COMP_TIMEOUT_MS}ms`
+      : `Comps proxy request failed: ${err instanceof Error ? err.message : "unknown error"}`;
+    __bdDebug.push(`Comps proxy threw: ${msg}`);
     return [];
   }
   clearTimeout(timeout);
 
-  // Bright Data reports policy/zone errors as HTTP 200 with the real error in
-  // headers (x-brd-err-code / x-brd-error / proxy-status) and an empty body —
-  // surface those instead of silently treating the lookup as "no results".
-  const errCode = resp.headers.get("x-brd-err-code");
-  const errMsg = resp.headers.get("x-brd-error");
-  if (!resp.ok || errCode || errMsg) {
-    const body = await resp.text().catch(() => "");
-    __bdDebug.push(
-      `BD lookup failed: status=${resp.status} errCode=${errCode ?? "-"} errMsg=${(errMsg || body).slice(0, 300)}`,
-    );
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => "");
+    __bdDebug.push(`Comps proxy failed: status=${resp.status} body=${text.slice(0, 300)}`);
     return [];
   }
 
-  // Bright Data brd_json returns the SERP object directly at the top level —
-  // no array wrapper, no stringified inner payload — with organic results in
-  // body.organic. Extract the first array container present, in preference
-  // order: organic → organic_results → items → results.
-  const body = (await resp.json().catch(() => null)) as Record<string, unknown> | null;
-  const items = body
-    ? (["organic", "organic_results", "items", "results"] as const)
-        .map((key) => body[key])
-        .find((value) => Array.isArray(value)) as unknown[] | undefined
-    : undefined;
-
-  if (!items || items.length === 0) {
-    __bdDebug.push("BD lookup returned no items");
-    return [];
-  }
-
-  const comps: ComparablePrice[] = [];
-  for (const item of items) {
-    const rec = item as Record<string, unknown>;
-    const title = String(rec.title ?? "");
-    // brd_json organic entries expose link/description; keep url/snippet as
-    // fallbacks for other shapes. parsePriceINR, domainToMerchant, the http
-    // guard, and MAX_COMPS below are unchanged.
-    const url = String(rec.link ?? rec.url ?? "");
-    const snippet = String(rec.snippet ?? rec.description ?? "");
-    const price = parsePriceINR(`${title} ${snippet}`);
-    if (price !== null && url.startsWith("http")) {
-      comps.push({ merchant: domainToMerchant(url), price, url });
-    }
-    if (comps.length >= MAX_COMPS) break;
-  }
+  const data = (await resp.json().catch(() => null)) as { comps?: unknown } | null;
+  const rawComps = Array.isArray(data?.comps) ? data.comps : [];
+  const comps: ComparablePrice[] = rawComps.filter(
+    (c): c is ComparablePrice =>
+      !!c &&
+      typeof (c as ComparablePrice).merchant === "string" &&
+      typeof (c as ComparablePrice).price === "number" &&
+      typeof (c as ComparablePrice).url === "string",
+  );
 
   if (comps.length === 0) {
-    __bdDebug.push("BD lookup ok but no parseable INR prices in SERP items");
+    __bdDebug.push("Comps proxy returned no comparable prices");
   } else {
-    __bdDebug.push(`BD lookup ok: ${comps.length} comparable prices parsed`);
+    __bdDebug.push(`Comps proxy ok: ${comps.length} comparable prices parsed`);
   }
   return comps;
 }
