@@ -96,6 +96,79 @@ function domainToMerchant(url: string): string {
   }
 }
 
+/* ── Sanity filter — drop junk candidates, never invent or adjust prices ── */
+
+// Hard INR sanity bounds: anything outside this range is a parse artifact
+// (comment counts, USD figures, …), not a real secondhand listing price.
+const SANITY_MIN = 300;
+const SANITY_MAX = 500_000;
+
+// Outlier bounds relative to the median of the OTHER candidate prices.
+const MEDIAN_MIN_FRACTION = 0.15;
+const MEDIAN_MAX_MULTIPLE = 5;
+
+// Hosts that are Indian marketplaces even without a .in TLD.
+const INDIAN_MARKETPLACE_HOSTS = new Set([
+  "flipkart.com",
+  "myntra.com",
+  "meesho.com",
+  "croma.com",
+  "snapdeal.com",
+  "shopclues.com",
+  "quikr.com",
+]);
+
+function isIndianListing(url: string): boolean {
+  try {
+    const host = new URL(url).hostname.toLowerCase().replace(/^www\./, "");
+    return host.endsWith(".in") || INDIAN_MARKETPLACE_HOSTS.has(host);
+  } catch {
+    return false;
+  }
+}
+
+function median(values: number[]): number | null {
+  if (values.length === 0) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0
+    ? (sorted[mid - 1] + sorted[mid]) / 2
+    : sorted[mid];
+}
+
+/**
+ * Drop candidates that fail sanity checks — never adjust or fabricate a price.
+ * 1. Absolute bounds: ₹300 – ₹500,000.
+ * 2. Outlier check: each price must sit between 15% and 5× the median of the
+ *    OTHER candidate prices (leave-one-out), computed across the full
+ *    candidate set before any MAX_COMPS cap.
+ * 3. When more than MAX_COMPS survive, prefer Indian marketplace / .in hosts
+ *    first (others are kept, just ranked lower — never excluded outright).
+ * If every candidate fails, an empty array is returned and the caller (the
+ * appraise function) degrades honestly to "estimate".
+ */
+export function sanityFilter<T extends { price: number; url: string }>(
+  candidates: T[],
+): T[] {
+  let kept = candidates.filter((c) => c.price >= SANITY_MIN && c.price <= SANITY_MAX);
+  if (kept.length <= 1) return kept;
+
+  const all = kept.map((c) => c.price);
+  kept = kept.filter((c, i) => {
+    const others = all.filter((_, j) => j !== i);
+    const med = median(others);
+    if (med === null || med === 0) return true;
+    return c.price >= med * MEDIAN_MIN_FRACTION && c.price <= med * MEDIAN_MAX_MULTIPLE;
+  });
+
+  if (kept.length > MAX_COMPS) {
+    kept.sort(
+      (a, b) => Number(isIndianListing(b.url)) - Number(isIndianListing(a.url)),
+    );
+  }
+  return kept.slice(0, MAX_COMPS);
+}
+
 /* ── Handler (Vercel Node runtime) ── */
 
 export default async function handler(
@@ -191,7 +264,9 @@ export default async function handler(
           .find((value) => Array.isArray(value)) as unknown[] | undefined
       : undefined;
 
-    const comps: { merchant: string; price: number; url: string }[] = [];
+    // Collect every parseable candidate first — the sanity filter runs across
+    // the FULL candidate set (median-based outlier check) before any cap.
+    const candidates: { merchant: string; price: number; url: string }[] = [];
     for (const item of items ?? []) {
       const rec = item as Record<string, unknown>;
       const title = String(rec.title ?? "");
@@ -201,12 +276,16 @@ export default async function handler(
       const snippet = String(rec.snippet ?? rec.description ?? "");
       const price = parsePriceINR(`${title} ${snippet}`);
       if (price !== null && url.startsWith("http")) {
-        comps.push({ merchant: domainToMerchant(url), price, url });
+        candidates.push({ merchant: domainToMerchant(url), price, url });
       }
-      if (comps.length >= MAX_COMPS) break;
     }
 
-    // Zero comps is a valid result — never fabricate one.
+    // Sanity filter: drops parse artifacts (comment counts, USD figures,
+    // out-of-band outliers) and prefers Indian listings when over capacity.
+    // Never fabricates or adjusts a price. May return [] — that is a valid
+    // result and the appraise function degrades honestly to "estimate".
+    const comps = sanityFilter(candidates);
+
     res.status(200).json({ comps });
   } catch (err) {
     // Surface the real error message instead of a generic Vercel 500.
