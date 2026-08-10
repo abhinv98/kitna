@@ -218,7 +218,7 @@ async function fetchLiveComps(searchQuery: string): Promise<ComparablePrice[]> {
   const timer = setTimeout(() => controller.abort(), COMP_TIMEOUT_MS);
 
   try {
-    const resp = await fetch("https://api.brightdata.com/requestAuthorization", {
+    const resp = await fetch("https://api.brightdata.com/request", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${token}`,
