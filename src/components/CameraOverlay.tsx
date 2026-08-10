@@ -53,13 +53,11 @@ export default function CameraOverlay({
     };
   }, [box, natural]);
 
-  const topLabel = detections[highlightIndex]?.label ?? detections[0]?.label;
-
   return (
     <div ref={containerRef} className="relative w-full h-full bg-black">
       <img
         src={imageSrc}
-        alt={topLabel ? `Your item, detected as ${topLabel}` : "Your item being scanned"}
+        alt="Your item in frame"
         className="w-full h-full object-contain"
         onLoad={(e) => {
           const el = e.currentTarget;
@@ -98,7 +96,7 @@ export default function CameraOverlay({
                   isHighlight ? "bg-primary text-on-primary" : "bg-black/70 text-white"
                 }`}
               >
-                {d.label} &middot; {Math.round(d.score * 100)}%
+                Item detected
               </span>
             </div>
           );

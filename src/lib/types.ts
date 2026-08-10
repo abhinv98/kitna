@@ -45,8 +45,6 @@ export interface AppraisalSession {
   image: string;
   isDemo: boolean;
   demoObject?: string;
-  /** Friendly label of the object detected during the scan step, e.g. "Mug or Cup". */
-  detectedObject?: string;
   result?: AppraisalResult;
 }
 

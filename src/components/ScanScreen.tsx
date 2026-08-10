@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Card } from "@/components/ui/card";
 import { AspectRatio } from "@/components/ui/aspect-ratio";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import CameraOverlay from "@/components/CameraOverlay";
 import { detectObjects, getDetector, type ScanDetection } from "@/lib/scan";
 import type { AppraisalSession } from "@/lib/types";
@@ -19,8 +18,8 @@ type ScanStatus = "loading-model" | "scanning" | "found" | "maybe" | "not-found"
 
 interface ScanScreenProps {
   session: AppraisalSession;
-  /** Continue to analysis; pass null to skip scan and let the AI identify from the photo. */
-  onComplete: (detectedObject: string | null) => void;
+  /** Continue to analysis. The scan only frames the crop — the AI identifies the item from the photo alone. */
+  onComplete: () => void;
   /** Go back to the capture screen to retake the photo. */
   onBack: () => void;
 }
@@ -86,15 +85,12 @@ export default function ScanScreen({ session, onComplete, onBack }: ScanScreenPr
   // Auto-continue when a confident object is found.
   useEffect(() => {
     if (status !== "found" || !top) return;
-    const t = setTimeout(() => onCompleteRef.current(top.label), AUTO_CONTINUE_DELAY);
+    const t = setTimeout(() => onCompleteRef.current(), AUTO_CONTINUE_DELAY);
     return () => clearTimeout(t);
   }, [status, top]);
 
-  const handleSkip = useCallback(() => onCompleteRef.current(null), []);
-  const handleContinue = useCallback(() => {
-    if (top) onCompleteRef.current(top.label);
-    else onCompleteRef.current(null);
-  }, [top]);
+  const handleSkip = useCallback(() => onCompleteRef.current(), []);
+  const handleContinue = useCallback(() => onCompleteRef.current(), []);
 
   return (
     <div className="min-h-screen bg-background flex flex-col items-center p-4">
@@ -160,10 +156,7 @@ export default function ScanScreen({ session, onComplete, onBack }: ScanScreenPr
             <div className="rounded-xl border border-primary/20 bg-primary/5 px-4 py-4 space-y-4 text-center">
               <div className="flex items-center justify-center gap-2 flex-wrap">
                 <CheckCircle2 className="w-5 h-5 text-primary shrink-0" />
-                <p className="text-sm font-semibold text-foreground">
-                  Found it &mdash; <span className="text-primary">{top.label}</span>
-                </p>
-                <Badge variant="primary">{Math.round(top.score * 100)}% sure</Badge>
+                <p className="text-sm font-semibold text-foreground">Found it</p>
               </div>
 
               {/* Auto-continue countdown */}
@@ -192,14 +185,14 @@ export default function ScanScreen({ session, onComplete, onBack }: ScanScreenPr
           {status === "maybe" && top && (
             <div className="rounded-xl border border-accent/30 bg-accent/5 px-4 py-4 space-y-4 text-center">
               <p className="text-sm font-semibold text-foreground">
-                Maybe a {top.label}? <span className="text-foreground/50">({Math.round(top.score * 100)}% sure)</span>
+                Got your item in frame
               </p>
               <p className="text-xs text-foreground/40">
-                Not quite sure &mdash; want to go with this?
+                Ready to appraise this?
               </p>
               <div className="flex gap-2">
                 <Button size="sm" className="flex-1" onClick={handleContinue}>
-                  Yes, it&rsquo;s a {top.label}
+                  Appraise this
                 </Button>
                 <Button variant="outline" size="sm" onClick={runScan}>
                   <RefreshCw className="w-4 h-4" />

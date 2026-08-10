@@ -23,10 +23,7 @@ export default function App() {
     setScreen(data.isDemo ? "analyzing" : "scan");
   };
 
-  const handleScanComplete = (detectedObject: string | null) => {
-    setSession((prev) =>
-      prev ? { ...prev, detectedObject: detectedObject ?? undefined } : prev,
-    );
+  const handleScanComplete = () => {
     setScreen("analyzing");
   };
 
