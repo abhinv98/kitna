@@ -261,12 +261,16 @@ async function fetchLiveComps(searchQuery: string): Promise<ComparablePrice[]> {
     return [];
   }
 
-  const data = await resp.json().catch(() => null);
-  const items = Array.isArray(data)
-    ? data
-    : Array.isArray((data as { data?: unknown } | null)?.data)
-      ? (data as { data: unknown[] }).data
-      : null;
+  // Bright Data brd_json returns the SERP object directly at the top level —
+  // no array wrapper, no stringified inner payload — with organic results in
+  // body.organic. Extract the first array container present, in preference
+  // order: organic → organic_results → items → results.
+  const body = (await resp.json().catch(() => null)) as Record<string, unknown> | null;
+  const items = body
+    ? (["organic", "organic_results", "items", "results"] as const)
+        .map((key) => body[key])
+        .find((value) => Array.isArray(value)) as unknown[] | undefined
+    : undefined;
 
   if (!items || items.length === 0) {
     __bdDebug.push("BD lookup returned no items");
@@ -277,10 +281,13 @@ async function fetchLiveComps(searchQuery: string): Promise<ComparablePrice[]> {
   for (const item of items) {
     const rec = item as Record<string, unknown>;
     const title = String(rec.title ?? "");
-    const url = String(rec.url ?? "");
-    const snippet = String(rec.snippet ?? "");
+    // brd_json organic entries expose link/description; keep url/snippet as
+    // fallbacks for other shapes. parsePriceINR, domainToMerchant, the http
+    // guard, and MAX_COMPS below are unchanged.
+    const url = String(rec.link ?? rec.url ?? "");
+    const snippet = String(rec.snippet ?? rec.description ?? "");
     const price = parsePriceINR(`${title} ${snippet}`);
-    if (price !== null && url) {
+    if (price !== null && url.startsWith("http")) {
       comps.push({ merchant: domainToMerchant(url), price, url });
     }
     if (comps.length >= MAX_COMPS) break;
